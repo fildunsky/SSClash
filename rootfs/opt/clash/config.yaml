@@ -35,6 +35,7 @@ dns:
     - '*.lan' # исключает внутренние домены .lan из fake-ip режима
     - '*.local'
     - '+.msftconnecttest.com' # чтобы Windows не показывал глобус вместо Wifi
+    - '+.msftncsi.com' # чтобы Windows не показывал глобус вместо провода
     - '+.3gppnetwork.org' # для работы voWifi в телефонах
 
 keep-alive-idle: 15
