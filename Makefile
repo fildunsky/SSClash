@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-ssclash
-PKG_VERSION:=1.8.2
+PKG_VERSION:=1.8.2.2-do
 PKG_RELEASE:=1
 PKG_MAINTAINER:=ZeroChaos <dev@null.la>
 
@@ -50,8 +50,8 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./rootfs/opt/clash/config.yaml $(1)/opt/clash/
 	$(INSTALL_BIN) ./rootfs/opt/clash/nft.conf $(1)/opt/clash/
 
-	$(INSTALL_DIR) $(1)/opt/clash/ui
-	$(CP) ./rootfs/opt/clash/ui/* $(1)/opt/clash/ui/
+	$(INSTALL_DIR) $(1)/opt/clash/zash
+	$(CP) ./rootfs/opt/clash/zash/* $(1)/opt/clash/zash/
 
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
 	$(INSTALL_DATA) ./rootfs/usr/share/luci/menu.d/luci-app-ssclash.json $(1)/usr/share/luci/menu.d/
@@ -66,7 +66,7 @@ endef
 define Package/$(PKG_NAME)/postrm
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
-	rm -rf /opt/clash/ui
+	rm -rf /opt/clash/zash
 	rm -f /opt/clash/ruleset
 	rm -rf /tmp/clash
 	rm -rf /www/luci-static/resources/view/ssclash
