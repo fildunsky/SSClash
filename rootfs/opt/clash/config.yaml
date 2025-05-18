@@ -1,35 +1,54 @@
-mode: rule
-ipv6: false
-log-level: error
-allow-lan: false
-tproxy-port: 7894
-unified-delay: true
-tcp-concurrent: true
-external-controller: 0.0.0.0:9090
-external-ui: ./zash
-external-ui-url: "https://github.com/Zephyruso/zashboard/releases/latest/download/dist-cdn-fonts.zip"
+# основные настройки
+mode: rule # режим работы по правилам
+ipv6: false # выключаем IPv6, т.к. он может мешать работе
+log-level: error # уровень предупреждений в журнале событий
+allow-lan: false # если поставить true, можно открыть SOCKS5 прокси для ваших устройств
+tproxy-port: 7894 # порт прозрачного прокси
+unified-delay: true # все серверы пингуются по два раза, показывая лучшую скорость
+tcp-concurrent: true # многопотоковый режим (ускоряет работу)
+external-controller: 0.0.0.0:9090 # адрес Dashboard панели Clash
+#secret: "Kruto!P@ro11" # раскомментируйте, если хотите установить пароль на панель
+external-ui: ./zash # папка, в которую Clash скачает файлы панели Zashboard
+external-ui-url: "https://github.com/Zephyruso/zashboard/releases/latest/download/dist-cdn-fonts.zip" # ссылка на саму панель, позволяет обновлять её
 
-# DNS server settings
-# This section is optional. When not present, the DNS server will be disabled.
+# Блок настройки DNS
 dns:
   enable: true
   listen: 0.0.0.0:7874
   ipv6: false
-  # Bootstrap DNS
-  default-nameserver: ['1.1.1.1', '1.0.0.1', '8.8.8.8', '8.8.4.4']
-  # Upstream DNS
-  nameserver: ['https://dns10.quad9.net/dns-query', 'https://dns.aa.net.uk/dns-query']
+  enhanced-mode: fake-ip # особый режим работы Clash, использует поддельные DNS для ускорения работы, есть dns кеш, у некоторых программ и сервисов с ним могут быть сложности, если будет мешать, можно добавить исключения или полностью его отключить
+  fake-ip-range: 198.18.0.1/16 # специальный диапазон ненастоящих IP адресов
+  default-nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+  nameserver:
+    - https://dns10.quad9.net/dns-query
+    - https://dns.aa.net.uk/dns-query
+  fake-ip-filter-mode: blacklist
+  fake-ip-filter:
+    - '*.t.me'
+    - '*.telegram.me'
+    - '*.telegram.org'
+    - '*.openwrt.org'
+    - '*.pool.ntp.org'
+    - '+.openwrt.pool.ntp.org'
+    - '*.lan' # исключает внутренние домены .lan из fake-ip режима
+    - '*.local'
+    - '+.msftconnecttest.com' # чтобы Windows не показывал глобус вместо Wifi
+    - '+.3gppnetwork.org' # для работы voWifi в телефонах
 
-# find-process-mode: off
-# global-client-fingerprint: chrome
+keep-alive-idle: 15
+keep-alive-interval: 15
 
+# Блок правил вашего профиля
 profile:
-  store-selected: true
-  store-fake-ip: true
+  store-selected: true # сохраняет при перезагрузках выбор серверов в панели Dashboard
+  store-fake-ip: true # сохраняет назначенные ненастоящие IP адреса для запросов
+  tracing: false
 
-# Provides a default traffic mark for outbound connections on Linux
-routing-mark: 2 # Prevent cyclic redirection
+routing-mark: 2 # необходимо помечать траффик, которым управляет Clash для маршрутизации по правилам
 
+# Блок описывающий сниффер - эта система больше помогает Clash разбираться, какой траффик куда направлять, но как и fake-ip может давать сбои, так как идёт вмешательство в траффик, некоторые программы или сервисы, направленные напрямую мимо ВПН, всё равно могут ругаться на то, что включен ВПН, тогда нужно либо полностью отключить сниффер enable: false либо добавить исключения ниже в skip-domain
 sniffer:
   enable: true
   sniff:
@@ -41,112 +60,217 @@ sniffer:
     # QUIC:
     #   ports: [443, 8443]
   skip-domain:
-    - 'Mijia Cloud'
-    - +.lan
-    - +.local
-    - +.push.apple.com
-    - +.apple.com
+    - "Mijia Cloud"
+    - '+.lan'
+    - '+.local'
+    - '+.push.apple.com'
+    - '+.apple.com'
+
+#  skip-src-address:
+#    - 192.168.8.108/32 # если нужно исключить конкретное устройство в вашей сети, пропишите его адрес с /32 на конце здесь
+#  skip-dst-address:
+#    - 192.168.8.108/32 # если нужно исключить конкретное устройство в вашей сети, пропишите его адрес с /32 на конце здесь
+
+# блок описания ваших серверов, поддерживаются wireguard, amnezia, vless, vmess, hysteria, socks5, shadowsocks, и многое другое, а также можно добавлять любые интерфейсы роутера. Каждый сервер описывается блоком начиная с пары отступов и дефиса. Имя name может быть любым, для вашего удобства в него можно вставлять emoji флаг страны сервера, если у вас их несколько.
 
 proxies:
-  # vless
-  - name: 'XX-reality' # change it
-    type: vless
-    server: xx-reality-server-IP # change it
-    port: 443
-    uuid: 528aeb97-a633-468d-81f7-8185d26bcb64 # change it
-    network: tcp
-    tls: true
-    udp: true
-    flow: xtls-rprx-vision
-    servername: masking-domain.example.com # change it
-    reality-opts:
-      public-key: 2R_qtReOBExLOx1aZj8s4N8x-Ru_wbo-o2neemZEDB0 # change it
-      short-id: ae380de2eeded283 # change it
-    client-fingerprint: chrome
 
-  - name: 'YY-reality' # change it
-    type: vless
-    server: yy-reality-server-IP # change it
-    port: 443
-    uuid: 3f0d4ce6-e4fe-46f9-804c-cce633e22785 # change it
-    network: tcp
-    tls: true
+  - name: 🏴‍☠️ WARP
+    type: wireguard
+    private-key: +Al97TGBYk9XMwTtiXjuZ06azVTFdV23ABWc8SfdyHY= # Поменяйте на ваш ключ Cloudflare WARP
+    server: 188.114.97.66 # Endpoint можно менять на другой IP адрес из генератора
+    port: 3138 # можно менять на порт из генератора
+    ip: 172.16.0.2
+    public-key: bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+    allowed-ips: ['0.0.0.0/0']
     udp: true
-    flow: xtls-rprx-vision
-    servername: masking-domain.example.org # change it
-    reality-opts:
-      public-key: beAHvGPT-mhlYQAvX7u_rQQfnJqTXaStmRFkTnkUolE # change it
-      short-id: 0890fec52c6dd1ca # change it
-    client-fingerprint: chrome
+    mtu: 1280 # на некоторых провайдерах этот параметр может мешать, если нет пинга, пробуйте эту строку убрать
+    remote-dns-resolve: true # на некоторых провайдерах этот параметр может мешать (конфиг запустится, но сайты не будут открываться), тогда пробуйте его убрать вместе со строкой dns: ниже либо перевести в режим false
+    dns: [1.1.1.1, 1.0.0.1] 
+    amnezia-wg-option:
+      jc: 120 # Можно менять количество мусорных пакетов от 1 до 128, меньше = быстрее
+      jmin: 23 # от 1 до 1280, но меньше jmax
+      jmax: 911 # до 1280, но больше jmin
+      s1: 0
+      s2: 0
+      h1: 1
+      h2: 2
+      h3: 3
+      h4: 4
+
+  - name: 🇳🇱 Proton
+    type: wireguard
+    private-key: wBWnH4yYbVt+kRje04uNHb8/CM0eitsRNXBv8qpWWV8=
+    server: 138.199.53.242
+    port: 51820
+    ip: 10.2.0.2
+    public-key: +DE6qrCbWBxBY2rkopc+jVUDnQ60VYuTkkV6LM4rcwg=
+    allowed-ips: ['0.0.0.0/0']
+    udp: true
+    mtu: 1280
+    remote-dns-resolve: true
+    dns: [10.2.0.1]
+    amnezia-wg-option:
+      jc: 5
+      jmin: 21
+      jmax: 37
+      s1: 0
+      s2: 0
+      h1: 1
+      h2: 2
+      h3: 3
+      h4: 4
+
+# Так прописывается конфигурация vless, нужно убрать решетку перед каждой строкой и подставить свои значения
+      
+#  - name: 🇬🇧 UK
+#    type: vless
+#    server: XX.XXX.XX.XXX
+#    port: 443
+#    uuid: dedaBaba-papa-mama-ya43-4857s75
+#    network: tcp
+#    tls: true
+#    udp: true
+#    flow: xtls-rprx-vision
+#    servername: telegram.org
+#    reality-opts:
+#      public-key: 583z_mc-Antoha-fLxrlB5tpszb4Z8$5fh8)*93h
+#      short-id: 848485Hdhbfh
+#    client-fingerprint: chrome
 
 proxy-groups:
-  # Select (used for selecting proxy or proxy group)
-  - name: PROXY
-    type: select
-    # disable-udp: true
-    proxies: [XX-reality, YY-reality] # change it, add the others
 
-  # Fallback
-  - name: FALLBACK
+  - name: Amnezia
     type: fallback
-    proxies: [XX-reality, YY-reality] # change it, add the others
-    url: 'https://www.gstatic.com/generate_204' # or https://cp.cloudflare.com/generate_204
+    icon: https://www.clashverge.dev/assets/icons/warp.svg
+    proxies:
+      - 🏴‍☠️ WARP
+      - 🇳🇱 Proton
+    url: 'http://cp.cloudflare.com/generate_204'
     interval: 300
 
-  # # Load-balance
-  # - name: LB-PROXY
-  #   type: load-balance
-  #   proxies: [XX-reality, YY-reality] # change it, add the others
-  #   url: 'https://www.gstatic.com/generate_204'
-  #   interval: 300
-  #   strategy: consistent-hashing # or round-robin
+  - name: PROXY
+    type: fallback
+    proxies:
+      - 🇳🇱 Proton
+#     - 🇳🇱 NL
+    url: 'http://cp.cloudflare.com/generate_204'
+    interval: 300
+
+# блок описания списков для формирования правил
 
 rule-providers:
 
-  direct-domain:
-    behavior: classical
-    type: http
-    format: text
-    url: 'https://YOUR_URL/direct-domain.list' # change it
-    interval: 1800
-    path: ./ruleset/direct-domain.txt
+  ru-blocked: # имя списка
+    behavior: domain # тип списка - по доменам
+    type: http # http означает, что список находится где-то в сети и его нужно скачать
+    format: text # формат списка
+    url: 'https://cdn.jsdelivr.net/gh/shvchk/unblock-net/lists/clash/ru-blocked'
+    interval: 86400 # раз в сутки список автоматически обновляется
+    path: ./ruleset/ru-blocked.yaml # путь и имя файла этого списка на роутере
 
-  direct-ip:
-    behavior: classical
+  twitter:
+    behavior: classical # список содержит и домены, и IP адреса
     type: http
-    format: text
-    url: 'https://YOUR_URL/direct-ip.list' # change it
-    interval: 1800
-    path: ./ruleset/direct-ip.txt
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Twitter/Twitter.yaml"
+    interval: 86400
+    path: ./ruleset/twitter.yaml
 
-  proxy-domain:
+  instagram:
     behavior: classical
     type: http
-    format: text
-    url: 'https://YOUR_URL/proxy-domain.list' # change it
-    interval: 1800
-    path: ./ruleset/proxy-domain.txt
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Instagram/Instagram.yaml"
+    interval: 86400
+    path: ./ruleset/instagram.yaml
 
-  proxy-ip:
+  facebook:
     behavior: classical
     type: http
-    format: text
-    url: 'https://YOUR_URL/proxy-ip.list' # change it
-    interval: 1800
-    path: ./ruleset/proxy-ip.txt
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Facebook/Facebook.yaml"
+    interval: 86400
+    path: ./ruleset/facebook.yaml
 
-  antifilter-ip:
+  youtube:
     behavior: classical
     type: http
-    format: text
-    url: 'https://YOUR_URL/antifilter-ip.list' # change it
-    interval: 43200
-    path: ./ruleset/antifilter-ip.txt
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/YouTube/YouTube.yaml"
+    interval: 86400
+    path: ./ruleset/youtube.yaml
+
+  discord-domain:
+    behavior: classical
+    type: http
+    url: "https://raw.githubusercontent.com/fildunsky/clash_discord/refs/heads/main/discord-domain.yaml"
+    interval: 86400
+    path: ./ruleset/discord-domain.yaml
+
+  discord-ip:
+    behavior: classical
+    type: http
+    url: "https://raw.githubusercontent.com/fildunsky/clash_discord/refs/heads/main/discord-ip.yaml"
+    interval: 86400
+    path: ./ruleset/discord-ip.yaml
+
+  whatsapp:
+    behavior: classical
+    type: http
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Whatsapp/Whatsapp.yaml"    
+    interval: 86400
+    path: ./ruleset/whatsapp.yaml
+
+  notion:
+    behavior: classical
+    type: http
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Notion/Notion.yaml"
+    interval: 86400
+    path: ./ruleset/notion.yaml
+
+  gemini:
+    behavior: classical
+    type: http
+    format: yaml
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Gemini/Gemini.yaml"
+    interval: 86400
+    path: ./ruleset/gemini.yaml
+    
+  openai:
+    behavior: classical
+    type: http
+    format: yaml
+    url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/OpenAI/OpenAI.yaml"
+    interval: 86400
+    path: ./ruleset/openai.yaml
+
+# Правила, как и что Clash будет маршрутизировать. Самым последним правилом желательно оставлять MATCH,DIRECT - чтобы всё остальное, что не описано правилами, шло напрямую минуя тоннели ВПН.
 
 rules:
-  - RULE-SET,direct-domain,DIRECT
-  - RULE-SET,direct-ip,DIRECT
-  - RULE-SET,proxy-domain,PROXY
-  - RULE-SET,proxy-ip,PROXY
-  - RULE-SET,antifilter-ip,PROXY
+  - DOMAIN-SUFFIX,3gppnetwork.org,DIRECT # для voWifi
+  - DOMAIN-SUFFIX,mts.ru,DIRECT # для voWifi
+  - DOMAIN-SUFFIX,megafon.ru,DIRECT # для voWifi
+  - RULE-SET,whatsapp,DIRECT # тоже самое и для Whatsapp
+  - RULE-SET,gemini,PROXY
+  - RULE-SET,openai,PROXY
+  - RULE-SET,youtube,Amnezia
+  - RULE-SET,twitter,Amnezia
+  - RULE-SET,instagram,Amnezia
+  - RULE-SET,facebook,Amnezia
+  - RULE-SET,discord-domain,Amnezia
+  - RULE-SET,discord-ip,Amnezia
+  - RULE-SET,notion,PROXY
+  - DOMAIN-SUFFIX,chatgpt.com,PROXY
+# 4DPA
+  - DOMAIN-SUFFIX,4pda.to,PROXY
+  - DOMAIN-SUFFIX,4pda.ru,PROXY
+  - DOMAIN-SUFFIX,4pda.ws,PROXY
+  - IP-CIDR,2.56.178.172/32,PROXY
+  - IP-CIDR,5.252.176.150/32,PROXY
+  - IP-CIDR,31.131.253.250/32,PROXY
+  - IP-CIDR,35.186.227.140/32,PROXY
+  - IP-CIDR,85.192.30.120/32,PROXY
+  - IP-CIDR,104.22.34.226/32,PROXY
+  - IP-CIDR,108.181.60.131/32,PROXY
+  - IP-CIDR,185.236.234.42/32,PROXY
+  - IP-CIDR,188.114.98.228/32,PROXY
+# Популярные сервисы
+  - RULE-SET,ru-blocked,Amnezia
   - MATCH,DIRECT

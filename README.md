@@ -1,81 +1,79 @@
 <h1 align="center">
   <img src="Meta.png" alt="Meta Kernel" width="200">
-  <br>Meta Kernel<br>
+  <br>Super Simple Clash для Mihomo<br>
 </h1>
 
-<h3 align="center">Here's the step-by-step process for installing and configuring SSClash on your OpenWrt router</h3>
+<h3 align="center">Установка и настройка SSClash на OpenWrt</h3>
 
-# Setup Guide
+# Установка
 
-## Step 1: Update Package List
-Update the package list to ensure you have the latest available versions.
+## Шаг 1: Обновить список пакетов
+Обновитесь, чтобы убедиться, что у вас самые свежие версии.
 
 ```bash
 opkg update
 ```
 
-## Step 2: Install Required Packages
-Install the necessary kernel module for nftables.
+## Шаг 2: Установка зависимостей
+Необходимо установить модуль ядра для nftables.
 
 ```bash
 opkg install kmod-nft-tproxy
 ```
 
-For iptables (if you have OpenWrt version < 22.03.x) – `iptables-mod-tproxy`.
-
-## Step 3: Download and Install `luci-app-ssclash` Package
-Download the SSClash package and install it.
+Если у вас старая версия OpenWrt (ниже 22.03), у вас iptables, нужен – `iptables-mod-tproxy`.
 
 ```bash
-curl -L https://github.com/fildunsky/SSClash/releases/download/v1.8.2.2-do/luci-app-ssclash_1.8.2.2-do-r1_all.ipk -o /tmp/luci-app-ssclash.ipk
+opkg install iptables-mod-tproxy
+```
+
+## Шаг 3: Скачать и установить `luci-app-ssclash`
+Загрузите вручную или командой и установите.
+
+```bash
+curl -L https://github.com/fildunsky/SSClash/releases/download/v1.8.2.3-do/luci-app-ssclash_1.8.2.3-do-r1_all.ipk -o /tmp/luci-app-ssclash.ipk
 opkg install /tmp/luci-app-ssclash.ipk
 rm /tmp/*.ipk
 ```
 
-## Step 4: Download Clash.Meta Kernel
-Navigate to the `bin` directory and download the Clash.Meta Kernel. Choose the appropriate architecture.
+## Шаг 4: Скачайте ядро Mihomo
+Важно выбрать правильную архитектуру для процессора вашего роутера. Ядро необходимо положить в `/opt/clash/bin`
 
 ```bash
 cd /opt/clash/bin
 ```
 
-For **amd64** architecture:
-
-```bash
-curl -L https://github.com/MetaCubeX/mihomo/releases/download/v1.19.8/mihomo-linux-amd64-compatible-v1.19.8.gz -o clash.gz
-```
-
-For **arm64** architecture:
+Для **arm64** - Xiaomi AX3000T, Netis N6, GL-MT3000, Cudy TR3000, Huasifei WH3000:
 
 ```bash
 curl -L https://github.com/MetaCubeX/mihomo/releases/download/v1.19.8/mihomo-linux-arm64-v1.19.8.gz -o clash.gz
 ```
 
-For **mipsel_24kc** architecture:
+Для **mipsel_24kc**:
 
 ```bash
 curl -L https://github.com/MetaCubeX/mihomo/releases/download/v1.19.8/mihomo-linux-mipsle-softfloat-v1.19.8.gz -o clash.gz
 ```
 
-Need a different architecture? Visit the [MetaCubeX Release Page](https://github.com/MetaCubeX/mihomo/releases) and choose the one that matches your device.
+[Другие архитектуры](https://github.com/MetaCubeX/mihomo/releases).
 
-## Step 5: Prepare the Clash Binary
-Decompress the downloaded file and make it executable.
+## Шаг 5: Подготовка ядра
+Распакуйте скачанный файл и выдайте ему права на исполнение.
 
 ```bash
 gunzip clash.gz
 chmod +x clash
 ```
 
-## Step 6: Managing Clash from LuCI interface
-I've written a simple interface for managing Clash from LuCI interface `luci-app-ssclash`. Edit Clash config and Apply.
+## Шаг 6: Управление Clash из интерфейса LuCI
+В [Zerolab.net](https://github.com/zerolabnet/SSClash) создали простой интерфейс для управления Clash из интерфейса LuCI `luci-app-ssclash`. Вам необходимо отредактировать конфиг прежде чем запускать Clash.
 
 <p align="center">
  <img src="scr-00.png" width="100%">
 </p>
 
-## Step 7: You can access to Dashboard from LuCI interface or manual
-You can access the Dashboard at:
+## Шаг 7: Доступ в панель Dashboard по кнопке из LuCI интерфейса или вручную
+Когда Clash запущен, стандартно панель висит на 9090 порту:
 
 ```
 http://ROUTER_IP:9090/ui/
@@ -85,71 +83,12 @@ http://ROUTER_IP:9090/ui/
  <img src="scr-01.png" width="100%">
 </p>
 
-# Remove Clash
-To remove Clash, delete the related files, `luci-app-ssclash` package and kernel module `kmod-nft-tproxy` or `iptables-mod-tproxy`.
+# Удаление Clash
+Чтобы удалить Clash, удалите его файлы, пакет `luci-app-ssclash` и модуль ядра `kmod-nft-tproxy` или `iptables-mod-tproxy`.
 
 ```bash
-opkg remove luci-app-ssclash kmod-nft-tproxy
+opkg remove luci-app-ssclash kmod-nft-tproxy iptables-mod-tproxy
 rm -rf /opt/clash
 ```
 
----
-
-# Extra info (optional): Automating Clash Rules Update in OpenWrt whenever the Internet interface is brought up
-
-To automatically update the rules for Clash whenever the Internet interface is brought up in OpenWrt, follow these step:
-
-## Create the Shell Script
-
-1. Open a terminal and create a new shell script named `40-clash_rules` in the `/etc/hotplug.d/iface/` directory:
-
-```bash
-vi /etc/hotplug.d/iface/40-clash_rules
-```
-
-2. [Insert the following script content](https://raw.githubusercontent.com/zerolabnet/ssclash/main/update_all_rule_providers.sh) (change `api_base_url` if needed):
-
-```sh
-#!/bin/sh
-
-# Add delay
-sleep 10
-
-# API IP address and port
-api_base_url="http://192.168.1.1:9090"
-
-# API URL
-base_url="$api_base_url/providers/rules"
-
-# Get JSON response with provider names
-response=$(curl -s "$base_url")
-
-# Extract provider names using standard utilities
-providers=$(echo "$response" | grep -o '"name":"[^"]*"' | sed 's/"name":"\([^"]*\)"/\1/')
-
-# Check if data retrieval was successful
-if [ -z "$providers" ]; then
-  echo "Failed to retrieve providers or no providers found."
-  exit 1
-fi
-
-# Loop through each provider name and send PUT request to update
-for provider in $providers; do
-  echo "Updating provider: $provider"
-  curl -X PUT "$base_url/$provider"
-
-  # Check success and output the result
-  if [ $? -eq 0 ]; then
-    echo "Successfully updated $provider"
-  else
-    echo "Failed to update $provider"
-  fi
-done
-
-# Service restart
-/etc/init.d/clash reload
-```
-
-3. Save and exit the editor.
-
-The script will now automatically run whenever the Internet interface is brought up. This ensures that the rules for Clash are updated as soon as the router is rebooted and connected to the Internet.
+Подробное [Wiki по настройке Clash](https://ssclash.notion.site/Super-Simple-Clash-15989188f6b48051a97fc887adea736a).
