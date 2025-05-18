@@ -48,7 +48,7 @@ curl -L https://github.com/MetaCubeX/mihomo/releases/download/v1.19.8/mihomo-lin
 For **arm64** architecture:
 
 ```bash
-curl -L https://github.com/MetaCubeX/mihomo/releases/download/v1.19.2/mihomo-linux-arm64-v1.19.8.gz -o clash.gz
+curl -L https://github.com/MetaCubeX/mihomo/releases/download/v1.19.8/mihomo-linux-arm64-v1.19.8.gz -o clash.gz
 ```
 
 For **mipsel_24kc** architecture:
