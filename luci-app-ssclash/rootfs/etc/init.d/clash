@@ -13,6 +13,7 @@ PROXY_PROVIDERS_TMPFS="/tmp/clash/proxy_providers"
 PROXY_PROVIDERS_LINK="${CLASH_DIR}/proxy_providers"
 SETTINGS_FILE="${CLASH_DIR}/settings"
 USE_TMPFS_RULES="true"
+CONFIG_TEST_TIMEOUT="20"
 
 if [ -f "$SETTINGS_FILE" ]; then
 	tmpfs_val="$(grep -m1 '^USE_TMPFS_RULES=' "$SETTINGS_FILE" 2>/dev/null | cut -d'=' -f2)"
@@ -197,6 +198,32 @@ restart_dnsmasq() {
 	fi
 }
 
+# Function to run Clash configuration test without allowing startup hangs
+run_config_test() {
+	local timeout_seconds="${CONFIG_TEST_TIMEOUT:-20}"
+
+	# Avoid relying on timeout utility flavor (busybox/coreutils differences).
+	# Run the test in background and enforce timeout ourselves.
+	"$CLASH_BIN" -d "$CLASH_DIR" -t &
+	local test_pid=$!
+	local elapsed=0
+
+	while kill -0 "$test_pid" >/dev/null 2>&1; do
+		if [ "$elapsed" -ge "$timeout_seconds" ]; then
+			kill -TERM "$test_pid" >/dev/null 2>&1
+			sleep 1
+			kill -KILL "$test_pid" >/dev/null 2>&1
+			wait "$test_pid" 2>/dev/null
+			msg "WARNING: Clash configuration test timed out after ${timeout_seconds}s, continuing startup to avoid boot lock"
+			return 0
+		fi
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+
+	wait "$test_pid"
+}
+
 start_service() {
 	msg "Starting Clash service..."
 
@@ -207,7 +234,7 @@ start_service() {
 	setup_clash_directories || return 1
 
 	# Check Clash configuration
-	if ! "$CLASH_BIN" -d "$CLASH_DIR" -t; then
+	if ! run_config_test; then
 		msg "ERROR: Clash configuration test failed"
 		return 1
 	fi
