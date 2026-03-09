@@ -13,6 +13,8 @@ SETTINGS_FILE="/opt/clash/settings"
 readonly SUBSCRIPTION_CACHE_FILE="/tmp/clash/clash_subscription_ips.cache"
 # Lock file to prevent concurrent access to cache
 readonly SUBSCRIPTION_LOCK_FILE="/tmp/clash/clash_subscription.lock"
+# Max seconds for one DNS resolve attempt to avoid startup hangs
+readonly DNS_RESOLVE_TIMEOUT="3"
 # Reserved networks
 readonly RESERVED_NETWORKS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4 255.255.255.255/32"
 # Fake-ip whitelist IP-CIDR technical list (used only by the firewall, not by config.yaml)
@@ -145,25 +147,65 @@ populate_fakeip_ipset_from_file() {
     msg "Populated ipset $FAKEIP_IPSET_NAME with $(echo "$FAKEIP_WHITELIST_IPS" | wc -l | xargs) entries"
 }
 
+# Run command with timeout and capture stdout to file
+run_command_with_timeout() {
+    local timeout_seconds="$1"
+    local output_file="$2"
+    shift 2
+
+    : > "$output_file"
+    "$@" >"$output_file" 2>/dev/null &
+    local cmd_pid=$!
+    local elapsed=0
+
+    while kill -0 "$cmd_pid" >/dev/null 2>&1; do
+        if [ "$elapsed" -ge "$timeout_seconds" ]; then
+            kill -TERM "$cmd_pid" >/dev/null 2>&1
+            sleep 1
+            kill -KILL "$cmd_pid" >/dev/null 2>&1
+            wait "$cmd_pid" 2>/dev/null
+            return 124
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    wait "$cmd_pid"
+    return $?
+}
+
 # Function to resolve domain name to IP addresses
 resolve_domain() {
     local domain="$1"
     local resolved_ips=""
+    local tmp_out="/tmp/clash/resolve_${$}.out"
+
+    mkdir -p /tmp/clash 2>/dev/null
 
     # Use nslookup to resolve the domain
     if command -v nslookup >/dev/null 2>&1; then
-        resolved_ips=$(nslookup "$domain" 2>/dev/null | awk '/^Address: / { print $2 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+        if run_command_with_timeout "$DNS_RESOLVE_TIMEOUT" "$tmp_out" nslookup "$domain"; then
+            resolved_ips=$(awk '/^Address: / { print $2 }' "$tmp_out" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+        elif [ $? -eq 124 ]; then
+            msg "WARNING: DNS resolve timeout (${DNS_RESOLVE_TIMEOUT}s) for domain: $domain (nslookup)"
+        fi
     fi
 
     # If nslookup failed or not available, try using getent
-    if [ -z "$resolved_ips" ] && command -v getent >/dev/null 2>&1;
-    then
-        resolved_ips=$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+    if [ -z "$resolved_ips" ] && command -v getent >/dev/null 2>&1; then
+        if run_command_with_timeout "$DNS_RESOLVE_TIMEOUT" "$tmp_out" getent hosts "$domain"; then
+            resolved_ips=$(awk '{print $1}' "$tmp_out" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+        elif [ $? -eq 124 ]; then
+            msg "WARNING: DNS resolve timeout (${DNS_RESOLVE_TIMEOUT}s) for domain: $domain (getent)"
+        fi
     fi
+
+    rm -f "$tmp_out"
 
     # Ensure each IP is on a separate line and remove duplicates
     if [ -n "$resolved_ips" ]; then
-        echo "$resolved_ips" | tr ' ' '\n' | grep -v '^$' | sort -u
+        echo "$resolved_ips" | tr ' ' '
+' | grep -v '^$' | sort -u
     fi
 }
 
