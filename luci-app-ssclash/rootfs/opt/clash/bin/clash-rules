@@ -13,6 +13,9 @@ SETTINGS_FILE="/opt/clash/settings"
 readonly SUBSCRIPTION_CACHE_FILE="/tmp/clash/clash_subscription_ips.cache"
 # Lock file to prevent concurrent access to cache
 readonly SUBSCRIPTION_LOCK_FILE="/tmp/clash/clash_subscription.lock"
+# Timeouts for subscription extraction and DNS resolution during early startup
+readonly DOMAIN_RESOLVE_TIMEOUT=2
+readonly SUBSCRIPTION_EXTRACTION_TIMEOUT=15
 # Reserved networks
 readonly RESERVED_NETWORKS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4 255.255.255.255/32"
 # Fake-ip whitelist IP-CIDR technical list (used only by the firewall, not by config.yaml)
@@ -308,10 +311,63 @@ populate_fakeip_ipset_from_file() {
     msg "Populated ipset $FAKEIP_IPSET_NAME with $(echo "$FAKEIP_WHITELIST_IPS" | wc -l | xargs) entries"
 }
 
+has_network_route() {
+    ip route show default 2>/dev/null | grep -q 'default'
+}
+
+# Run a command with a simple shell timeout wrapper.
+# Avoids external timeout utilities and works in standard OpenWrt base system.
+run_with_timeout() {
+    local timeout_secs="$1"
+    shift
+    if [ $# -eq 0 ]; then
+        return 1
+    fi
+
+    ( "$@" ) &
+    local pid=$!
+    local start=$(date +%s)
+    local end=$((start + timeout_secs))
+    local status=0
+
+    while kill -0 "$pid" 2>/dev/null; do
+        local now=$(date +%s)
+        if [ "$now" -ge "$end" ]; then
+            kill -TERM "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null || status=124
+            return $status
+        fi
+        sleep 1
+    done
+
+    wait "$pid"
+    return $?
+}
+
+has_working_dns() {
+    if ! has_network_route; then
+        return 1
+    fi
+
+    if command -v nslookup >/dev/null 2>&1; then
+        if run_with_timeout "$DOMAIN_RESOLVE_TIMEOUT" nslookup example.com >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    if command -v getent >/dev/null 2>&1; then
+        if run_with_timeout "$DOMAIN_RESOLVE_TIMEOUT" getent hosts example.com >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 # Function to resolve domain name to IP addresses
 resolve_domain() {
     local domain="$1"
     local resolved_ips=""
+    local timeout_cmd=""
 
     # During early boot DNS may be unavailable and blocking lookups can freeze
     # the init sequence (uhttpd / LuCI). If system uptime is still low, skip
@@ -326,15 +382,19 @@ resolve_domain() {
         fi
     fi
 
-    # Use nslookup to resolve the domain
+    if ! has_working_dns; then
+        msg "Skipping DNS resolve for '$domain' (DNS not available)"
+        return 0
+    fi
+
+    # Prefer a short lookup timeout to avoid hangs when DNS is misconfigured.
     if command -v nslookup >/dev/null 2>&1; then
-        resolved_ips=$(nslookup "$domain" 2>/dev/null | awk '/^Address: / { print $2 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+        resolved_ips=$(run_with_timeout "$DOMAIN_RESOLVE_TIMEOUT" nslookup "$domain" 2>/dev/null | awk '/^Address: / { print $2 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
     fi
 
     # If nslookup failed or not available, try using getent
-    if [ -z "$resolved_ips" ] && command -v getent >/dev/null 2>&1;
-    then
-        resolved_ips=$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+    if [ -z "$resolved_ips" ] && command -v getent >/dev/null 2>&1; then
+        resolved_ips=$(run_with_timeout "$DOMAIN_RESOLVE_TIMEOUT" getent hosts "$domain" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
     fi
 
     # Ensure each IP is on a separate line and remove duplicates
@@ -1110,28 +1170,19 @@ extract_server_ips() {
         msg "No proxy-providers configured, using only config servers"
         subscription_servers=""
     else
-        # Try to get subscription servers from cache first
-        if [ -f "$SUBSCRIPTION_CACHE_FILE" ]; then
-            # Check if cache file is newer than 1 hour using find
+        # Try to get subscription servers from cache first.
+        # Startup must not block on stale subscription data or heavy cache processing.
+        if [ -f "$SUBSCRIPTION_CACHE_FILE" ] && [ -s "$SUBSCRIPTION_CACHE_FILE" ]; then
             if [ -n "$(find "$SUBSCRIPTION_CACHE_FILE" -mmin -60 2>/dev/null)" ]; then
                 subscription_servers=$(cat "$SUBSCRIPTION_CACHE_FILE")
                 msg "Using cached subscription IPs (fresh cache)"
             else
-                msg "Subscription cache is stale, updating..."
-                subscription_servers=$(extract_subscription_ips)
-                # Update cache
-                if [ -n "$subscription_servers" ]; then
-                    echo "$subscription_servers" > "$SUBSCRIPTION_CACHE_FILE"
-                fi
+                msg "Subscription cache is stale; skipping stale cache for startup, update deferred to WAN-up"
+                subscription_servers=""
             fi
         else
-            msg "No subscription cache found, extracting subscription IPs..."
-            subscription_servers=$(extract_subscription_ips)
-            # Create cache
-            if [ -n "$subscription_servers" ]; then
-                mkdir -p "$(dirname "$SUBSCRIPTION_CACHE_FILE")"
-                echo "$subscription_servers" > "$SUBSCRIPTION_CACHE_FILE"
-            fi
+            msg "No usable subscription cache found. Using only config servers until network is available."
+            subscription_servers=""
         fi
     fi
 
@@ -2539,6 +2590,21 @@ refresh_fakeip_whitelist_file() {
     return 0
 }
 
+ensure_fakeip_whitelist_for_startup() {
+    # Avoid expensive fakeip whitelist regeneration on startup if a cached file
+    # already exists from a previous run. The refresh is deferred to WAN-up.
+    [ "$AUTO_FAKEIP_WHITELIST" = "true" ] || return 0
+    is_ipcidr_whitelist_mode || return 0
+
+    if [ -s "$FAKEIP_WHITELIST_FILE" ]; then
+        msg "Using existing fakeip whitelist file for startup; refresh deferred to WAN-up"
+        return 0
+    fi
+
+    msg "No existing fakeip whitelist file found; generating fakeip whitelist for startup"
+    refresh_fakeip_whitelist_file
+}
+
 update_fakeip_whitelist_sets() {
     msg "Updating fakeip whitelist IP-CIDR sets..."
     load_all_settings_once
@@ -2806,7 +2872,9 @@ start() {
     preflight_check_tun_stack
 
     local server_ips fake_ip_config fake_ip_range fake_ip_filter_mode
+    msg "start(): extracting server IPs"
     server_ips=$(extract_server_ips)
+    msg "start(): extract_server_ips completed"
     fake_ip_config=$(extract_fake_ip_config)
 
     # Parse the combined result
@@ -2822,7 +2890,7 @@ start() {
     # (both modes leave part of the traffic on real IPs and need firewall-level
     # marking for services — see is_ipcidr_whitelist_mode()).
     if is_ipcidr_whitelist_mode; then
-        refresh_fakeip_whitelist_file
+        ensure_fakeip_whitelist_for_startup
         FAKEIP_WHITELIST_IPS=$(read_fakeip_whitelist_entries)
         if [ -n "$FAKEIP_WHITELIST_IPS" ]; then
             msg "Loaded fakeip whitelist: $(echo "$FAKEIP_WHITELIST_IPS" | wc -l | xargs) IP/CIDR entries from $FAKEIP_WHITELIST_FILE (mode: $FAKE_IP_FILTER_MODE)"

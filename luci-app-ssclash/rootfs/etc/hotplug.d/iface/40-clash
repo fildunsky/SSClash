@@ -244,4 +244,12 @@ update_rule_providers() {
 update_proxy_providers
 update_rule_providers
 
+msg "Triggering clash-rules update after provider refresh"
+/opt/clash/bin/clash-rules update >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    warn "clash-rules update failed"
+else
+    msg "clash-rules update completed"
+fi
+
 msg "Provider update complete"
