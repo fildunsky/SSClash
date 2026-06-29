@@ -830,12 +830,15 @@ async function downloadMihomoKernel(downloadUrl, version, arch) {
             throw new Error(_('Failed to set executable permissions: %s').format((chmodResult.stderr || '').trim() || _('unknown error')));
         }
 
-        const verifyResult = await fs.exec('test', ['-x', targetFile]);
+        // Verify with the binary itself
+        const verifyResult = await fs.exec(targetFile, ['-v']);
         if (verifyResult.code !== 0) {
             let currentMode = '';
             try {
-                const statResult = await fs.exec('stat', ['-c', '%a', targetFile]);
-                if (statResult.code === 0) currentMode = (statResult.stdout || '').trim();
+                const st = await L.resolveDefault(fs.stat(targetFile), null);
+                if (st && st.mode != null) {
+                    currentMode = (st.mode & 511).toString(8);
+                }
             } catch (_e) {}
 
             ui.addNotification(null, E('p',

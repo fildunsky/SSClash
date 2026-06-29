@@ -44,6 +44,7 @@
                 "/bin/gzip": [ "exec" ],
                 "/bin/mv": [ "exec" ],
                 "/bin/chmod": [ "exec" ],
+                "/bin/rm": [ "exec" ],
                 "/bin/mkdir": [ "exec" ]
             },
             "ubus": {
