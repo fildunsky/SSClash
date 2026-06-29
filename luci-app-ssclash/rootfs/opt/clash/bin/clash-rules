@@ -13,6 +13,9 @@ SETTINGS_FILE="/opt/clash/settings"
 readonly SUBSCRIPTION_CACHE_FILE="/tmp/clash/clash_subscription_ips.cache"
 # Lock file to prevent concurrent access to cache
 readonly SUBSCRIPTION_LOCK_FILE="/tmp/clash/clash_subscription.lock"
+# Per-lookup DNS timeout (seconds). Bounds every name resolution so a dead
+# resolver can never freeze startup or the cron/hotplug update path.
+readonly DOMAIN_RESOLVE_TIMEOUT=2
 # Reserved networks
 readonly RESERVED_NETWORKS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4 255.255.255.255/32"
 # Fake-ip whitelist IP-CIDR technical list (used only by the firewall, not by config.yaml)
@@ -308,33 +311,79 @@ populate_fakeip_ipset_from_file() {
     msg "Populated ipset $FAKEIP_IPSET_NAME with $(echo "$FAKEIP_WHITELIST_IPS" | wc -l | xargs) entries"
 }
 
+# Return success if a default route exists (cheap, no fork) — the reliable
+# sign that the WAN link is up and DNS lookups are worth attempting.
+has_network_route() {
+    ip route show default 2>/dev/null | grep -q '^default'
+}
+
+# Run a command with a hard timeout, without depending on the external
+# `timeout` utility (not always present on a minimal OpenWrt image).
+#
+# The command's stdout is captured to a temp file rather than via a pipe so
+# that, if we have to kill it, no orphaned child can keep a pipe open and
+# block the surrounding command substitution. Returns the command's exit code,
+# or 124 on timeout (matching GNU timeout).
+#
+# Pass a single leaf binary (e.g. nslookup, getent) — not a shell wrapper that
+# forks further children, since on timeout only the direct child is signalled.
+run_with_timeout() {
+    local timeout_secs="$1"
+    shift
+    [ $# -gt 0 ] || return 1
+
+    local out
+    out=$(mktemp 2>/dev/null) || out="/tmp/clash_rwt.$$"
+
+    "$@" >"$out" 2>/dev/null &
+    local pid=$!
+    local waited=0
+
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$waited" -ge "$timeout_secs" ]; then
+            kill -TERM "$pid" 2>/dev/null
+            sleep 1
+            kill -KILL "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null
+            cat "$out" 2>/dev/null
+            rm -f "$out"
+            return 124
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    wait "$pid"
+    local rc=$?
+    cat "$out" 2>/dev/null
+    rm -f "$out"
+    return $rc
+}
+
 # Function to resolve domain name to IP addresses
 resolve_domain() {
     local domain="$1"
     local resolved_ips=""
 
-    # During early boot DNS may be unavailable and blocking lookups can freeze
-    # the init sequence (uhttpd / LuCI). If system uptime is still low, skip
-    # resolving domains and let only plain IPs be used; subscriptions can be
-    # fully refreshed later via the cron/hotplug update hook.
-    if [ -r /proc/uptime ]; then
-        local up_seconds
-        up_seconds=$(cut -d'.' -f1 /proc/uptime 2>/dev/null)
-        if [ -n "$up_seconds" ] && [ "$up_seconds" -lt 300 ]; then
-            msg "Skipping DNS resolve for '$domain' (uptime ${up_seconds}s, DNS may be unavailable)"
-            return 0
-        fi
+    # Without a default route the WAN is down: skip the lookup entirely. This
+    # is the common cold-boot-without-internet case and keeps startup from
+    # touching DNS at all (subscriptions are refreshed later via the
+    # cron/hotplug update hook once the link is up).
+    if ! has_network_route; then
+        msg "Skipping DNS resolve for '$domain' (no default route, WAN down)"
+        return 0
     fi
 
-    # Use nslookup to resolve the domain
+    # Every lookup is wrapped in a short timeout so a present-but-dead resolver
+    # (e.g. PPPoE up but upstream DNS not yet reachable) can never block the
+    # init sequence (uhttpd / LuCI) the way an unbounded lookup could.
     if command -v nslookup >/dev/null 2>&1; then
-        resolved_ips=$(nslookup "$domain" 2>/dev/null | awk '/^Address: / { print $2 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+        resolved_ips=$(run_with_timeout "$DOMAIN_RESOLVE_TIMEOUT" nslookup "$domain" | awk '/^Address: / { print $2 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
     fi
 
     # If nslookup failed or not available, try using getent
-    if [ -z "$resolved_ips" ] && command -v getent >/dev/null 2>&1;
-    then
-        resolved_ips=$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+    if [ -z "$resolved_ips" ] && command -v getent >/dev/null 2>&1; then
+        resolved_ips=$(run_with_timeout "$DOMAIN_RESOLVE_TIMEOUT" getent hosts "$domain" | awk '{print $1}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
     fi
 
     # Ensure each IP is on a separate line and remove duplicates
@@ -1110,28 +1159,25 @@ extract_server_ips() {
         msg "No proxy-providers configured, using only config servers"
         subscription_servers=""
     else
-        # Try to get subscription servers from cache first
-        if [ -f "$SUBSCRIPTION_CACHE_FILE" ]; then
-            # Check if cache file is newer than 1 hour using find
+        # Read subscription server IPs from cache only — never parse subscriptions
+        # synchronously here. Parsing resolves every subscription server name and,
+        # on a cold boot without internet, an unbounded resolve could freeze the
+        # init sequence (uhttpd / LuCI). The cache is (re)built off the critical
+        # path by the cron/WAN-up `update` hook, which calls cache_subscription_ips.
+        if [ -s "$SUBSCRIPTION_CACHE_FILE" ]; then
             if [ -n "$(find "$SUBSCRIPTION_CACHE_FILE" -mmin -60 2>/dev/null)" ]; then
-                subscription_servers=$(cat "$SUBSCRIPTION_CACHE_FILE")
                 msg "Using cached subscription IPs (fresh cache)"
             else
-                msg "Subscription cache is stale, updating..."
-                subscription_servers=$(extract_subscription_ips)
-                # Update cache
-                if [ -n "$subscription_servers" ]; then
-                    echo "$subscription_servers" > "$SUBSCRIPTION_CACHE_FILE"
-                fi
+                # Stale cache is still far better than nothing: proxy-server IPs
+                # rarely change, and these IPs feed the firewall RETURN rules that
+                # keep traffic to the proxy server from looping back into the tunnel.
+                # Use them now; a fresh refresh is deferred to the update hook.
+                msg "Subscription cache is stale; using it for startup, refresh deferred to WAN-up/cron"
             fi
+            subscription_servers=$(cat "$SUBSCRIPTION_CACHE_FILE")
         else
-            msg "No subscription cache found, extracting subscription IPs..."
-            subscription_servers=$(extract_subscription_ips)
-            # Create cache
-            if [ -n "$subscription_servers" ]; then
-                mkdir -p "$(dirname "$SUBSCRIPTION_CACHE_FILE")"
-                echo "$subscription_servers" > "$SUBSCRIPTION_CACHE_FILE"
-            fi
+            msg "No subscription cache yet; using only config servers until the update hook builds it"
+            subscription_servers=""
         fi
     fi
 

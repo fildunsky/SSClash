@@ -244,4 +244,14 @@ update_rule_providers() {
 update_proxy_providers
 update_rule_providers
 
+# Now that the WAN is up and DNS is reachable, (re)build the subscription IP
+# cache that startup intentionally skips when offline. This resolves the
+# subscription server names and refreshes the firewall RETURN rules so traffic
+# to the proxy servers bypasses the tunnel even after a cold boot without net.
+if /opt/clash/bin/clash-rules update >/dev/null 2>&1; then
+    msg "Subscription IP cache refreshed via clash-rules update"
+else
+    warn "clash-rules update failed (will retry on next cron cycle)"
+fi
+
 msg "Provider update complete"
