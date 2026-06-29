@@ -691,6 +691,10 @@ async function detectSystemArchitecture() {
             if (distribArch.startsWith('riscv64_')) return 'riscv64';
             if (distribArch.startsWith('loongarch64_')) return 'loong64';
 
+            // 32-bit Cortex-A cores (a5/a7/a8/a9/a15/a17) are all ARMv7-A, so
+            // map them to armv7 first — otherwise e.g. arm_cortex-a9_vfpv3
+            // would fall through to the _vfp check and pick a slower armv6 build.
+            if (distribArch.startsWith('arm_') && distribArch.includes('cortex-a')) return 'armv7';
             if (distribArch.includes('_neon-vfp')) return 'armv7';
             if (distribArch.includes('_neon') || distribArch.includes('_vfp')) return 'armv6';
             if (distribArch.startsWith('arm_')) return 'armv5';
@@ -804,7 +808,7 @@ async function downloadMihomoKernel(downloadUrl, version, arch) {
 
         await fs.exec('rm', ['-f', downloadPath, extractedFile]).catch(function() {});
 
-        const curlResult = await fs.exec('curl', ['-fL', '--retry', '2', '--connect-timeout', '15', downloadUrl, '-o', downloadPath]);
+        const curlResult = await fs.exec('curl', ['-fL', '--retry', '2', '--connect-timeout', '15', '--max-time', '300', downloadUrl, '-o', downloadPath]);
         if (curlResult.code !== 0) {
             throw new Error(_('Download failed: %s').format((curlResult.stderr || '').trim() || _('unknown error')));
         }

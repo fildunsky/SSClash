@@ -2,19 +2,21 @@
 # ================================================================
 #  SSClash Auto-Installer for OpenWrt
 #  Поддерживаемые версии: 21.x / 23.05.x / 24.10.x / 25.12.x
-#  Архитектуры: arm64, armhf, mipsel_24kc, mips_24kc, amd64
+#  Архитектуры: arm64, armv7/armv6/armv5, amd64, 386,
+#  mips/mipsel (soft/hardfloat), mips64/mips64le, riscv64, loong64
 #  https://github.com/zerolabnet/SSClash
 # ================================================================
 
 SSCLASH_API="https://api.github.com/repos/zerolabnet/SSClash/releases/latest"
 MIHOMO_BASE="https://github.com/MetaCubeX/mihomo/releases"
+MIHOMO_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 CLASH_BIN="/opt/clash/bin/clash"
 
 # SSCLASH_VER и URL пакетов заполняются в fetch_ssclash_release()
 SSCLASH_VER=""
 SSCLASH_APK_URL=""
 SSCLASH_IPK_URL=""
-PKG_UPDATED=0   # станет 1, если ensure_curl() уже обновил индекс
+PKG_UPDATED=0 # станет 1, если ensure_curl() уже обновил индекс
 
 # ── цвета ───────────────────────────────────────────────────────
 # printf '\033[Xm' корректно интерпретируется в любом POSIX sh
@@ -66,7 +68,6 @@ detect_openwrt() {
 
     OW_RELEASE="${DISTRIB_RELEASE:-unknown}"
     OW_MAJOR=$(echo "$OW_RELEASE" | cut -d. -f1)
-    OW_MINOR=$(echo "$OW_RELEASE" | cut -d. -f2)
 
     info "OpenWrt: ${B}${OW_RELEASE}${N}"
 
@@ -93,7 +94,9 @@ detect_openwrt() {
 detect_arch() {
     ARCH_RAW=$(uname -m)
 
-    # Уточняем по DISTRIB_TARGET из /etc/openwrt_release
+    # DISTRIB_ARCH из /etc/openwrt_release — самый надёжный источник на OpenWrt.
+    # Уже было прочитано в detect_openwrt(), но detect_arch может вызываться
+    # отдельно, поэтому подгружаем снова (идемпотентно).
     . /etc/openwrt_release
     TARGET="${DISTRIB_TARGET:-}"
     ARCH_PKG="${DISTRIB_ARCH:-}"
@@ -102,42 +105,69 @@ detect_arch() {
     info "OpenWrt target: ${B}${TARGET}${N}"
     info "DISTRIB_ARCH:   ${B}${ARCH_PKG}${N}"
 
-    case "$ARCH_RAW" in
-        aarch64)
-            MIHOMO_ARCH="arm64"
+    MIHOMO_ARCH=""
+
+    # --- Основной путь: маппинг по DISTRIB_ARCH ---------------------------
+    # Зеркалирует логику detectSystemArchitecture() в luci-app settings.js,
+    # чтобы инсталлер и веб-интерфейс выбирали одно и то же ядро mihomo.
+    case "$ARCH_PKG" in
+        aarch64_*)      MIHOMO_ARCH="arm64" ;;
+        x86_64)         MIHOMO_ARCH="amd64-compatible" ;;
+        i386_*)         MIHOMO_ARCH="386" ;;
+        riscv64_*)      MIHOMO_ARCH="riscv64" ;;
+        loongarch64_*)  MIHOMO_ARCH="loong64" ;;
+        arm_*)
+            # ARMv5/v6/v7 различаются по ядру/float/SIMD-признакам в строке арки.
+            # 32-битные Cortex-A (a5/a7/a8/a9/a15/a17) — это ARMv7-A, поэтому
+            # сразу armv7 (иначе cortex-a9_vfpv3 ошибочно ушёл бы в armv6).
+            case "$ARCH_PKG" in
+                *cortex-a*)      MIHOMO_ARCH="armv7" ;;
+                *_neon-vfp*)     MIHOMO_ARCH="armv7" ;;
+                *_neon*|*_vfp*)  MIHOMO_ARCH="armv6" ;;
+                *)               MIHOMO_ARCH="armv5" ;;
+            esac
             ;;
-        armv7l|armv6l)
-            # armv7 с hardfloat
-            MIHOMO_ARCH="armv7"
+        mips64el_*)     MIHOMO_ARCH="mips64le" ;;
+        mips64_*)       MIHOMO_ARCH="mips64" ;;
+        mipsel_*)
+            case "$ARCH_PKG" in
+                *hardfloat*) MIHOMO_ARCH="mipsle-hardfloat" ;;
+                *)           MIHOMO_ARCH="mipsle-softfloat" ;;
+            esac
             ;;
-        mips)
-            # big-endian MIPS (ar71xx, ath79 — старые роутеры)
-            MIHOMO_ARCH="mips-softfloat"
-            ;;
-        mipsel)
-            # little-endian MIPS (MediaTek MT76xx legacy, Realtek)
-            MIHOMO_ARCH="mipsle-softfloat"
-            ;;
-        x86_64)
-            MIHOMO_ARCH="amd64-compatible"
-            ;;
-        i686|i386)
-            MIHOMO_ARCH="386"
-            ;;
-        *)
-            warn "Неизвестная архитектура: ${ARCH_RAW}"
-            warn "Посмотри доступные ядра: ${MIHOMO_BASE}/latest"
-            MIHOMO_ARCH=""
+        mips_*)
+            case "$ARCH_PKG" in
+                *hardfloat*) MIHOMO_ARCH="mips-hardfloat" ;;
+                *)           MIHOMO_ARCH="mips-softfloat" ;;
+            esac
             ;;
     esac
 
-    # Дополнительная проверка по target для ARM:
-    # Некоторые armv7 роутеры возвращают uname -m = armv7l, но нужен armv7
-    case "$TARGET" in
-        *armvirt*|*bcm27xx*|*mvebu*|*sunxi*|*imx*|*bcm53xx*)
-            [ "$MIHOMO_ARCH" = "armv7" ] || true
-            ;;
-    esac
+    # --- Fallback: если DISTRIB_ARCH пуст или незнаком — по uname -m -------
+    if [ -z "$MIHOMO_ARCH" ]; then
+        [ -n "$ARCH_PKG" ] && warn "DISTRIB_ARCH '${ARCH_PKG}' не распознан — пробую uname -m"
+        case "$ARCH_RAW" in
+            aarch64)         MIHOMO_ARCH="arm64" ;;
+            armv7l)          MIHOMO_ARCH="armv7" ;;
+            armv6l)          MIHOMO_ARCH="armv6" ;;
+            armv5l|armv5tel) MIHOMO_ARCH="armv5" ;;
+            x86_64)          MIHOMO_ARCH="amd64-compatible" ;;
+            i686|i386)       MIHOMO_ARCH="386" ;;
+            riscv64)         MIHOMO_ARCH="riscv64" ;;
+            loongarch64)     MIHOMO_ARCH="loong64" ;;
+            mips64el)        MIHOMO_ARCH="mips64le" ;;
+            mips64)          MIHOMO_ARCH="mips64" ;;
+            # uname -m не различает soft/hardfloat для MIPS — берём softfloat
+            # (24kc и большинство OpenWrt MIPS-таргетов именно softfloat).
+            mipsel)          MIHOMO_ARCH="mipsle-softfloat" ;;
+            mips)            MIHOMO_ARCH="mips-softfloat" ;;
+            *)
+                warn "Неизвестная архитектура: uname='${ARCH_RAW}' DISTRIB_ARCH='${ARCH_PKG}'"
+                warn "Посмотри доступные ядра: ${MIHOMO_BASE}/latest"
+                MIHOMO_ARCH=""
+                ;;
+        esac
+    fi
 
     if [ -n "$MIHOMO_ARCH" ]; then
         info "Ядро mihomo: ${B}mihomo-linux-${MIHOMO_ARCH}${N}"
@@ -224,16 +254,18 @@ install_ssclash() {
 
     if [ "$PKG_MGR" = "apk" ]; then
         PKG_FILE="/tmp/luci-app-ssclash.apk"
-        curl -L "$SSCLASH_APK_URL" -o "$PKG_FILE" || die "Ошибка загрузки .apk"
+        curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
+            "$SSCLASH_APK_URL" -o "$PKG_FILE" || die "Ошибка загрузки .apk"
         log "Установка пакета..."
         apk add --allow-untrusted "$PKG_FILE" || die "Ошибка установки .apk"
-        rm -f /tmp/*.apk
+        rm -f "$PKG_FILE"
     else
         PKG_FILE="/tmp/luci-app-ssclash.ipk"
-        curl -L "$SSCLASH_IPK_URL" -o "$PKG_FILE" || die "Ошибка загрузки .ipk"
+        curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
+            "$SSCLASH_IPK_URL" -o "$PKG_FILE" || die "Ошибка загрузки .ipk"
         log "Установка пакета..."
         (cd /tmp && opkg install luci-app-ssclash.ipk) || die "Ошибка установки .ipk"
-        rm -f /tmp/*.ipk
+        rm -f "$PKG_FILE"
     fi
 }
 
@@ -247,20 +279,26 @@ install_mihomo() {
         return 0
     fi
 
+    # Версию берём через GitHub API
     log "Определяю последнюю версию mihomo..."
-    MIHOMO_VER=$(curl -s -L "${MIHOMO_BASE}/latest" \
-        | grep "title>Release" | head -1 | cut -d " " -f 4 | tr -d '\r\n')
+    MIHOMO_JSON=$(curl -s -L "$MIHOMO_API") \
+        || die "Не удалось получить данные релиза mihomo. Проверь интернет-соединение."
+    [ -z "$MIHOMO_JSON" ] && die "GitHub API вернул пустой ответ (mihomo)"
 
-    if [ -z "$MIHOMO_VER" ]; then
-        die "Не удалось получить версию mihomo. Проверь интернет-соединение."
-    fi
+    # tag_name вида "v1.18.0" — используется и в URL, и в имени файла ассета
+    MIHOMO_VER=$(printf '%s' "$MIHOMO_JSON" \
+        | grep '"tag_name"' | head -1 \
+        | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+
+    [ -z "$MIHOMO_VER" ] && die "Не удалось распарсить версию mihomo из ответа GitHub API"
     info "Последняя версия mihomo: ${B}${MIHOMO_VER}${N}"
 
     MIHOMO_URL="${MIHOMO_BASE}/download/${MIHOMO_VER}/mihomo-linux-${MIHOMO_ARCH}-${MIHOMO_VER}.gz"
     info "URL: ${MIHOMO_URL}"
 
     log "Загрузка ядра mihomo..."
-    curl -L "$MIHOMO_URL" -o /tmp/clash.gz || die "Ошибка загрузки ядра mihomo"
+    curl -fL --retry 2 --connect-timeout 15 --max-time 300 \
+        "$MIHOMO_URL" -o /tmp/clash.gz || die "Ошибка загрузки ядра mihomo"
 
     log "Распаковка в ${CLASH_BIN}..."
     mkdir -p "$(dirname "$CLASH_BIN")"
