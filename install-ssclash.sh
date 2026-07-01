@@ -195,12 +195,12 @@ pkg_update() {
 #  4. Установка зависимостей
 # ================================================================
 install_deps() {
-    log "Установка зависимостей: curl ${TPROXY_PKG} kmod-tun coreutils-base64"
+    log "Установка зависимостей: ${TPROXY_PKG} kmod-tun coreutils-base64"
     if [ "$PKG_MGR" = "apk" ]; then
-        apk add curl "$TPROXY_PKG" kmod-tun coreutils-base64 \
+        apk add "$TPROXY_PKG" kmod-tun coreutils-base64 \
             || die "Ошибка установки зависимостей"
     else
-        opkg install curl "$TPROXY_PKG" kmod-tun coreutils-base64 \
+        opkg install "$TPROXY_PKG" kmod-tun coreutils-base64 \
             || die "Ошибка установки зависимостей"
     fi
 }
