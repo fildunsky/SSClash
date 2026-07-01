@@ -358,8 +358,40 @@ service_triggers() {
 	procd_add_reload_trigger "clash"
 }
 
+boot_deps_ready() {
+	[ -n "$(pidof dnsmasq 2>/dev/null)" ] &&
+		ip route show default 2>/dev/null | grep -q '^default'
+}
+
+wait_for_boot_deps() {
+	local max=10
+	local dnsmasq_only=5
+	local i=0
+
+	while [ "$i" -lt "$max" ]; do
+		if boot_deps_ready; then
+			[ "$i" -gt 0 ] && msg "Boot dependencies ready after ${i}s"
+			return 0
+		fi
+
+		# dnsmasq is required for our DNS redirect path; default route is
+		# best-effort (clash-rules skips subscription DNS without it and the
+		# WAN-up hotplug refreshes later). Don't block the full 10s waiting
+		# for a route that may never appear (e.g. AP / offline boot).
+		if [ "$i" -ge "$dnsmasq_only" ] && [ -n "$(pidof dnsmasq 2>/dev/null)" ]; then
+			msg "dnsmasq ready after ${i}s (no default route yet; WAN-up hook will refresh)"
+			return 0
+		fi
+
+		sleep 1
+		i=$((i + 1))
+	done
+
+	msg "Boot wait timed out after ${max}s, starting anyway"
+	return 0
+}
+
 boot() {
-	# Wait for system initialization
-	sleep 10
+	wait_for_boot_deps
 	start
 }
