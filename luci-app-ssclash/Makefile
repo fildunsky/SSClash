@@ -9,7 +9,7 @@ PKG_RELEASE:=1
 PKG_MAINTAINER:=ZeroChaos <dev@null.la>
 
 LUCI_TITLE:=LuCI Support for SSClash
-LUCI_DEPENDS:=+luci-base +coreutils-base64 +kmod-tun
+LUCI_DEPENDS:=+luci-base +coreutils-base64 +kmod-tun +curl
 LUCI_PKGARCH:=all
 
 PKG_CONFIG_DEPENDS:= \
