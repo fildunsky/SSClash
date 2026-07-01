@@ -15,6 +15,9 @@ DNS_BACKUP_FILE="/opt/clash/.dns_backup"
 CONFIG_UPGRADE_BACKUP="${CLASH_DIR}/.config.yaml.upgrade.bak"
 SETTINGS_FILE="${CLASH_DIR}/settings"
 USE_TMPFS_RULES="true"
+ACTION_LOCK="/var/run/clash-action.lock"
+ACTION_STATUS="/tmp/clash/action.status"
+LOCK_HELD=0
 
 if [ -f "$SETTINGS_FILE" ]; then
 	tmpfs_val="$(grep -m1 '^USE_TMPFS_RULES=' "$SETTINGS_FILE" 2>/dev/null | cut -d'=' -f2)"
@@ -24,6 +27,31 @@ fi
 # Function to log messages
 msg() {
 	logger -p daemon.info -st "clash[$$]" "$*"
+}
+
+# Serialize start/stop/reload so overlapping triggers — a double-click in LuCI,
+# a retried request, or a procd config-file reload firing at the same time —
+# cannot run stop and start concurrently and leave the service half-configured
+# or stopped. The lock is held for the whole action and released when the
+# process exits. Reentrant within a single process via LOCK_HELD, so
+# reload_service -> stop/start does not deadlock against itself.
+acquire_lock() {
+	[ "$LOCK_HELD" = "1" ] && return 0
+	exec 9>"$ACTION_LOCK" 2>/dev/null || return 0
+	if ! flock -n 9; then
+		msg "Another start/stop/reload action is already in progress, skipping"
+		return 1
+	fi
+	LOCK_HELD=1
+	return 0
+}
+
+# Record the last action outcome (starting/running/stopping/stopped/error) so the
+# LuCI UI can tell "still working" from "failed" instead of guessing from a
+# dropped XHR.
+set_status() {
+	mkdir -p /tmp/clash 2>/dev/null
+	echo "$1" > "$ACTION_STATUS" 2>/dev/null
 }
 
 # Function to check the existence of files/directories
@@ -248,7 +276,7 @@ restart_dnsmasq() {
 	fi
 }
 
-start_service() {
+_do_start() {
 	msg "Starting Clash service..."
 
 	restore_upgrade_config_backup || return 1
@@ -301,7 +329,18 @@ start_service() {
 	msg "Clash service started successfully"
 }
 
-stop_service() {
+start_service() {
+	acquire_lock || return 0
+	set_status "starting"
+	if _do_start; then
+		set_status "running"
+	else
+		set_status "error"
+		return 1
+	fi
+}
+
+_do_stop() {
 	msg "Stopping Clash service..."
 
 	# Remove firewall rules
@@ -318,7 +357,16 @@ stop_service() {
 	msg "Clash service stopped"
 }
 
+stop_service() {
+	acquire_lock || return 0
+	set_status "stopping"
+	_do_stop
+	set_status "stopped"
+}
+
 reload_service() {
+	acquire_lock || return 0
+
 	msg "Reloading Clash service..."
 
 	stop

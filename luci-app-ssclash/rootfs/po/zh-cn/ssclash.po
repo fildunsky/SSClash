@@ -104,6 +104,15 @@ msgstr "未知错误"
 msgid "Service reloaded successfully."
 msgstr "服务已成功重载。"
 
+msgid "Service is restarting…"
+msgstr "服务正在重启…"
+
+msgid "Service is still restarting — it may take longer on a slow connection. Reload the page in a moment to check its status."
+msgstr "服务仍在重启中——在慢速连接下可能需要更长时间。请稍后刷新页面以查看其状态。"
+
+msgid "Service failed to start — the configuration was saved, but Mihomo did not come up. Check the system log (logread) for the error."
+msgstr "服务启动失败——配置已保存，但 Mihomo 未能启动。请查看系统日志（logread）以获取错误详情。"
+
 msgid "Unable to save contents: %s"
 msgstr "无法保存内容：%s"
 

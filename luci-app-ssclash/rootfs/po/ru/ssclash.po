@@ -110,6 +110,15 @@ msgstr "неизвестная ошибка"
 msgid "Service reloaded successfully."
 msgstr "Служба успешно перезагружена."
 
+msgid "Service is restarting…"
+msgstr "Служба перезапускается…"
+
+msgid "Service is still restarting — it may take longer on a slow connection. Reload the page in a moment to check its status."
+msgstr "Служба всё ещё перезапускается — на медленном соединении это может занять больше времени. Обновите страницу через несколько секунд, чтобы проверить её состояние."
+
+msgid "Service failed to start — the configuration was saved, but Mihomo did not come up. Check the system log (logread) for the error."
+msgstr "Не удалось запустить службу — конфигурация сохранена, но Mihomo не поднялся. Смотрите системный журнал (logread) для деталей ошибки."
+
 msgid "Unable to save contents: %s"
 msgstr "Не удалось сохранить содержимое: %s"
 

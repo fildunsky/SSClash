@@ -10,6 +10,7 @@
                 "/opt/clash/bin/clash-rules": [ "read", "stat", "exec" ],
                 "/opt/clash/lst/": [ "list" ],
                 "/opt/clash/lst/*.txt": [ "read" ],
+                "/tmp/clash/action.status": [ "read" ],
                 "/proc/net/dev": [ "read" ],
                 "/proc/net/route": [ "read" ],
                 "/sys/class/net": [ "list" ],

@@ -8,6 +8,19 @@
 let startStopButton = null;
 let editor = null;
 
+// Raise the LuCI RPC/XHR timeout for this page. Starting or restarting the
+// service briefly disrupts the router's own network (dnsmasq restart, firewall
+// rebuild); when the admin is connected through a slow/flaky link (e.g.
+// ZeroTier) the default ~20s timeout aborts requests mid-operation with errors
+// like "XHR request aborted by browser" / "No related RPC reply". A longer
+// timeout lets the round-trips complete once the link recovers. Scoped to this
+// page — a normal navigation resets it back to the system default.
+try {
+    if (typeof L !== 'undefined' && L.env && (!(L.env.rpctimeout > 0) || L.env.rpctimeout < 60)) {
+        L.env.rpctimeout = 60;
+    }
+} catch (e) { /* non-fatal: fall back to the default timeout */ }
+
 const callServiceList = rpc.declare({
     object: 'service',
     method: 'list',
@@ -24,14 +37,48 @@ async function getServiceStatus() {
     }
 }
 
+// Last outcome reported by the init.d script (starting/running/stopping/stopped/
+// error). Lets us tell an in-progress restart from a hard failure instead of
+// guessing when an RPC gets dropped mid-operation. Missing/unreadable → ''.
+async function readActionStatus() {
+    try {
+        return (await fs.read('/tmp/clash/action.status') || '').trim();
+    } catch (e) {
+        return '';
+    }
+}
+
+// Run a shell snippet detached from rpcd. `fs.exec` is a blocking RPC: the
+// browser XHR (and the underlying ubus call) waits for the command to finish.
+// A full service (re)start does a lot of slow work (config test, firewall, DNS,
+// dnsmasq restart, tun-wait), which over a laggy remote link (e.g. ZeroTier)
+// easily exceeds the XHR/ubus timeout — the request is reported as timed out and
+// the child process gets killed mid-restart, leaving the service stopped.
+// setsid + backgrounding + closed stdio detaches the init.d action so the RPC
+// returns immediately and the operation always runs to completion; the UI then
+// reflects the result by polling the service status.
+function execDetached(script) {
+    const quoted = '\'' + script.replace(/'/g, "'\\''") + '\'';
+    // Prefer setsid to fully detach into a new session; fall back to a plain
+    // backgrounded shell if busybox was built without setsid. Either way the
+    // job is backgrounded with closed stdio, so the outer shell (and the RPC)
+    // returns immediately. Guarded so the command runs exactly once.
+    const wrapped = 'if command -v setsid >/dev/null 2>&1; then setsid /bin/sh -c ' + quoted +
+        '; else /bin/sh -c ' + quoted + '; fi >/dev/null 2>&1 </dev/null &';
+    return fs.exec('/bin/sh', ['-c', wrapped]);
+}
+
 async function handleServiceAction(actions, errorMsg) {
     if (startStopButton) startStopButton.disabled = true;
     try {
-        for (const action of actions) {
-            await fs.exec('/etc/init.d/clash', [action]);
-        }
+        const script = actions.map(action => '/etc/init.d/clash ' + action).join('; ');
+        // Fire-and-forget: the action is dispatched detached and runs under procd
+        // regardless of this connection. A dropped RPC here does not mean the
+        // action failed, so we don't surface it as a fatal error — the caller
+        // confirms the real outcome by polling the service status.
+        await execDetached(script);
     } catch (e) {
-        ui.addNotification(null, E('p', errorMsg.format(e.message)), 'error');
+        console.warn(errorMsg.format(e.message));
     } finally {
         if (startStopButton) startStopButton.disabled = false;
     }
@@ -45,11 +92,18 @@ async function stopService() {
     await handleServiceAction(['stop', 'disable'], _('Unable to stop and disable service: %s'));
 }
 
-async function pollStatus(targetStatus, timeout = 5000) {
+async function pollStatus(targetStatus, timeout = 40000) {
     const startTime = Date.now();
     while (Date.now() - startTime < timeout) {
         if (await getServiceStatus() === targetStatus) {
             return true;
+        }
+        // Fail fast if the init.d action reported a hard error, instead of
+        // waiting out the whole timeout. A 2s grace lets init.d overwrite any
+        // stale "error" left by a previous attempt before we trust it.
+        if (targetStatus === true && Date.now() - startTime > 2000 &&
+            (await readActionStatus()) === 'error') {
+            return false;
         }
         await new Promise(resolve => setTimeout(resolve, 500));
     }
@@ -58,14 +112,19 @@ async function pollStatus(targetStatus, timeout = 5000) {
 
 async function toggleService() {
     const running = await getServiceStatus();
+    const target = !running;
     if (running) {
         await stopService();
-        await pollStatus(false);
     } else {
         await startService();
-        await pollStatus(true);
     }
-    window.location.reload();
+    if (await pollStatus(target, 60000)) {
+        window.location.reload();
+    } else {
+        ui.addNotification(null, E('p',
+            _('Service is still restarting — it may take longer on a slow connection. Reload the page in a moment to check its status.')
+        ), 'warning');
+    }
 }
 
 function parseYamlValue(yaml, key) {
@@ -253,14 +312,36 @@ return view.extend({
         const saveAndRestartCore = async function() {
             if (startStopButton) startStopButton.disabled = true;
             try {
+                // Phase 1 — must succeed. Runs before any network disruption, so
+                // a failure here is a real error worth surfacing.
                 const value = await writeAndTestConfig();
                 if (value === null) return;
 
-                await fs.exec('/etc/init.d/clash', ['reload']);
-                ui.addNotification(null, E('p', _('Service reloaded successfully.')), 'info');
+                // Phase 2 — fire-and-forget. The restart runs to completion under
+                // procd independently of this browser connection; rebuilding the
+                // firewall and restarting dnsmasq can briefly drop our own RPC
+                // link, but that does NOT stop the service. So we swallow a
+                // transient error here (the command has already been dispatched)
+                // and confirm the outcome by polling instead of treating the
+                // dropped request as a failure.
+                try {
+                    await execDetached('/etc/init.d/clash reload');
+                } catch (e) { /* link may have blipped; verify via polling below */ }
 
-                await pollStatus(true);
-                window.location.reload();
+                ui.addNotification(null, E('p', _('Service is restarting…')), 'info');
+
+                if (await pollStatus(true, 60000)) {
+                    ui.addNotification(null, E('p', _('Service reloaded successfully.')), 'info');
+                    window.location.reload();
+                } else if ((await readActionStatus()) === 'error') {
+                    ui.addNotification(null, E('p',
+                        _('Service failed to start — the configuration was saved, but Mihomo did not come up. Check the system log (logread) for the error.')
+                    ), 'error');
+                } else {
+                    ui.addNotification(null, E('p',
+                        _('Service is still restarting — it may take longer on a slow connection. Reload the page in a moment to check its status.')
+                    ), 'warning');
+                }
             } catch(e) {
                 ui.addNotification(null, E('p', _('Unable to save contents: %s').format(e.message)), 'error');
             } finally {
@@ -299,8 +380,8 @@ return view.extend({
                     '-H', 'Content-Type: application/json',
                     '-H', 'Authorization: Bearer ' + secret,
                     '--data', '{"path":"","payload":""}',
-                    '--connect-timeout', '5',
-                    '--max-time', '15'
+                    '--connect-timeout', '3',
+                    '--max-time', '10'
                 ];
                 if (useTls) {
                     curlArgs.push('-k');
