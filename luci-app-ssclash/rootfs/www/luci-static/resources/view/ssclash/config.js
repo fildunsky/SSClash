@@ -154,7 +154,7 @@ async function initializeAceEditor(content) {
 // =============================================================================
 
 // Keep in sync with luci-app-ssclash/Makefile PKG_VERSION
-const SSCLASH_VERSION = '4.6.2';
+const SSCLASH_VERSION = '4.6.3';
 
 const SSCLASH_REPO = 'zerolabnet/SSClash';
 const SSCLASH_RELEASES_URL = 'https://github.com/' + SSCLASH_REPO + '/releases';
@@ -196,7 +196,7 @@ return view.extend({
         const writeAndTestConfig = async function() {
             const value = editor.getValue().trim() + '\n';
 
-            await fs.write('/opt/clash/config.yaml', value);
+            await view_ssclash_utils.writeFile('/opt/clash/config.yaml', value);
             ui.addNotification(null, E('p', _('Configuration saved successfully.')), 'info');
 
             const testResult = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-t']);

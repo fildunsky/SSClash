@@ -5,6 +5,8 @@
 const RPC_TIMEOUT_SEC = 60;
 const SERVICE_POLL_TIMEOUT_MS = 60000;
 const SERVICE_POLL_INTERVAL_MS = 500;
+const WRITE_CHUNK_SIZE = 8000;
+const WRITE_INLINE_MAX = 32768;
 
 const callServiceList = rpc.declare({
     object: 'service',
@@ -20,6 +22,49 @@ function bumpRpcTimeout() {
             L.env.rpctimeout = RPC_TIMEOUT_SEC;
         }
     } catch (e) {}
+}
+
+function shellQuote(s) {
+    return '\'' + String(s).replace(/'/g, "'\\''") + '\'';
+}
+
+function encodeBase64Utf8(str) {
+    const bytes = new TextEncoder().encode(str);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+}
+
+async function writeFile(path, content) {
+    if (content.length <= WRITE_INLINE_MAX) {
+        return fs.write(path, content);
+    }
+
+    const tmpB64 = '/tmp/ssclash-write.b64';
+    const b64 = encodeBase64Utf8(content);
+
+    await fs.exec('/bin/sh', ['-c', 'rm -f ' + shellQuote(tmpB64)]);
+
+    for (let offset = 0; offset < b64.length; offset += WRITE_CHUNK_SIZE) {
+        const chunk = b64.slice(offset, offset + WRITE_CHUNK_SIZE);
+        const op = offset === 0 ? '>' : '>>';
+        const res = await fs.exec('/bin/sh', ['-c',
+            'printf %s ' + shellQuote(chunk) + ' ' + op + ' ' + shellQuote(tmpB64)
+        ]);
+        if (res.code !== 0) {
+            throw new Error((res.stderr || res.stdout || '').trim() || 'chunk write failed');
+        }
+    }
+
+    const res = await fs.exec('/bin/sh', ['-c',
+        'base64 -d ' + shellQuote(tmpB64) + ' > ' + shellQuote(path) +
+        ' && rm -f ' + shellQuote(tmpB64)
+    ]);
+    if (res.code !== 0) {
+        throw new Error((res.stderr || res.stdout || '').trim() || 'decode write failed');
+    }
 }
 
 function execDetached(script) {
@@ -54,6 +99,7 @@ async function waitForServiceStatus(getStatusFn, targetStatus, timeoutMs) {
 return L.Class.extend({
     bumpRpcTimeout: bumpRpcTimeout,
     execDetached: execDetached,
+    writeFile: writeFile,
     getClashRunning: getClashRunning,
     waitForServiceStatus: waitForServiceStatus,
     SERVICE_POLL_TIMEOUT_MS: SERVICE_POLL_TIMEOUT_MS,

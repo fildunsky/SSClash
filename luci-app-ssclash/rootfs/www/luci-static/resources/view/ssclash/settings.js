@@ -571,7 +571,7 @@ HWID_DEVICE_OS=${hwidDeviceOS}
                 );
             }
 
-            await fs.write('/opt/clash/config.yaml', updatedConfig);
+            await view_ssclash_utils.writeFile('/opt/clash/config.yaml', updatedConfig);
         }
 
         ui.addNotification(null, E('p', _('Settings saved. Please restart the Clash service for changes to take effect.')), 'info');
