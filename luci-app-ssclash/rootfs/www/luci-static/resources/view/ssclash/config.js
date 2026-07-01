@@ -2,70 +2,53 @@
 'require view';
 'require fs';
 'require ui';
-'require rpc';
 'require view.ssclash.utils';
 
 let startStopButton = null;
 let editor = null;
 
-const callServiceList = rpc.declare({
-    object: 'service',
-    method: 'list',
-    params: ['name'],
-    expect: { '': {} }
-});
+view_ssclash_utils.bumpRpcTimeout();
 
-async function getServiceStatus() {
+const getServiceStatus = function() {
+    return view_ssclash_utils.getClashRunning();
+};
+
+async function dispatchServiceActions(actions) {
+    const script = actions.map(function(action) {
+        return '/etc/init.d/clash ' + action;
+    }).join('; ');
     try {
-        const instances = (await callServiceList('clash'))['clash']?.instances;
-        return Object.values(instances || {})[0]?.running || false;
+        await view_ssclash_utils.execDetached(script);
     } catch (e) {
-        return false;
+        console.warn('Failed to dispatch clash service action:', e.message);
     }
 }
 
-async function handleServiceAction(actions, errorMsg) {
-    if (startStopButton) startStopButton.disabled = true;
-    try {
-        for (const action of actions) {
-            await fs.exec('/etc/init.d/clash', [action]);
-        }
-    } catch (e) {
-        ui.addNotification(null, E('p', errorMsg.format(e.message)), 'error');
-    } finally {
-        if (startStopButton) startStopButton.disabled = false;
-    }
-}
-
-async function startService() {
-    await handleServiceAction(['start', 'enable'], _('Unable to start and enable service: %s'));
-}
-
-async function stopService() {
-    await handleServiceAction(['stop', 'disable'], _('Unable to stop and disable service: %s'));
-}
-
-async function pollStatus(targetStatus, timeout = 5000) {
-    const startTime = Date.now();
-    while (Date.now() - startTime < timeout) {
-        if (await getServiceStatus() === targetStatus) {
-            return true;
-        }
-        await new Promise(resolve => setTimeout(resolve, 500));
-    }
-    return false;
+function notifyRestartPending() {
+    ui.addNotification(null, E('p',
+        _('Service is still restarting — it may take longer on a slow connection. Reload the page in a moment to check its status.')
+    ), 'warning');
 }
 
 async function toggleService() {
-    const running = await getServiceStatus();
-    if (running) {
-        await stopService();
-        await pollStatus(false);
-    } else {
-        await startService();
-        await pollStatus(true);
+    if (startStopButton) startStopButton.disabled = true;
+    try {
+        const running = await getServiceStatus();
+        const target = !running;
+        if (running) {
+            await dispatchServiceActions(['stop', 'disable']);
+        } else {
+            await dispatchServiceActions(['start', 'enable']);
+        }
+
+        if (await view_ssclash_utils.waitForServiceStatus(getServiceStatus, target)) {
+            window.location.reload();
+        } else {
+            notifyRestartPending();
+        }
+    } finally {
+        if (startStopButton) startStopButton.disabled = false;
     }
-    window.location.reload();
 }
 
 function parseYamlValue(yaml, key) {
@@ -171,7 +154,7 @@ async function initializeAceEditor(content) {
 // =============================================================================
 
 // Keep in sync with luci-app-ssclash/Makefile PKG_VERSION
-const SSCLASH_VERSION = '4.6.1';
+const SSCLASH_VERSION = '4.6.2';
 
 const SSCLASH_REPO = 'zerolabnet/SSClash';
 const SSCLASH_RELEASES_URL = 'https://github.com/' + SSCLASH_REPO + '/releases';
@@ -256,11 +239,18 @@ return view.extend({
                 const value = await writeAndTestConfig();
                 if (value === null) return;
 
-                await fs.exec('/etc/init.d/clash', ['reload']);
-                ui.addNotification(null, E('p', _('Service reloaded successfully.')), 'info');
+                try {
+                    await view_ssclash_utils.execDetached('/etc/init.d/clash reload');
+                } catch (e) {}
 
-                await pollStatus(true);
-                window.location.reload();
+                ui.addNotification(null, E('p', _('Service is restarting…')), 'info');
+
+                if (await view_ssclash_utils.waitForServiceStatus(getServiceStatus, true)) {
+                    ui.addNotification(null, E('p', _('Service reloaded successfully.')), 'info');
+                    window.location.reload();
+                } else {
+                    notifyRestartPending();
+                }
             } catch(e) {
                 ui.addNotification(null, E('p', _('Unable to save contents: %s').format(e.message)), 'error');
             } finally {
@@ -332,7 +322,9 @@ return view.extend({
                     _('Config reloaded via Mihomo API — active connections preserved.')
                 ), 'info');
 
-                await pollStatus(true);
+                await view_ssclash_utils.waitForServiceStatus(
+                    getServiceStatus, true, 5000
+                );
             } catch(e) {
                 ui.addNotification(null, E('p',
                     _('Config reload error: %s. Try "Save & Restart core" for a full restart.').format(e.message)

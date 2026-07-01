@@ -5,6 +5,8 @@
 'require network';
 'require view.ssclash.utils';
 
+view_ssclash_utils.bumpRpcTimeout();
+
 // =============================================================================
 // SECTION: Network interface helpers
 // =============================================================================
@@ -1833,8 +1835,23 @@ return view.extend({
         const restartButton = E('button', {
             'class': 'btn',
             'click': async function() {
+                restartButton.disabled = true;
                 try {
-                    await fs.exec('/etc/init.d/clash', ['restart']);
+                    try {
+                        await view_ssclash_utils.execDetached('/etc/init.d/clash restart');
+                    } catch (e) {}
+
+                    ui.addNotification(null, E('p', _('Service is restarting…')), 'info');
+
+                    if (!(await view_ssclash_utils.waitForServiceStatus(
+                        view_ssclash_utils.getClashRunning, true
+                    ))) {
+                        ui.addNotification(null, E('p',
+                            _('Service is still restarting — it may take longer on a slow connection. Reload the page in a moment to check its status.')
+                        ), 'warning');
+                        return;
+                    }
+
                     ui.addNotification(null, E('p', _('Clash service restarted successfully.')), 'info');
                     const currentMode = modeSelector.querySelector('input[name="interface_mode"]:checked').value;
                     const currentAutoDetectLan = autoDetectOptions.querySelector('#auto_detect_lan').checked;
@@ -1913,6 +1930,8 @@ return view.extend({
                     updateCurrentStatus(currentMode, currentAutoDetectLan, currentAutoDetectWan, savedInterfaces, detectedLanBridge, detectedWanInterface);
                 } catch (e) {
                     ui.addNotification(null, E('p', _('Failed to restart Clash service: %s').format(e.message)), 'error');
+                } finally {
+                    restartButton.disabled = false;
                 }
             },
             'style': 'margin-left: 10px;'

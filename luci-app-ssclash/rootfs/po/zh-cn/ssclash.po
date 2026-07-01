@@ -104,6 +104,12 @@ msgstr "未知错误"
 msgid "Service reloaded successfully."
 msgstr "服务已成功重载。"
 
+msgid "Service is restarting…"
+msgstr "服务正在重启…"
+
+msgid "Service is still restarting — it may take longer on a slow connection. Reload the page in a moment to check its status."
+msgstr "服务仍在重启中——在慢速连接下可能需要更长时间。请稍后刷新页面以查看其状态。"
+
 msgid "Unable to save contents: %s"
 msgstr "无法保存内容：%s"
 
