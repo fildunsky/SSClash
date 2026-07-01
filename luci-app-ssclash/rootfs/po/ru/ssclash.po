@@ -101,8 +101,8 @@ msgstr "Не удалось открыть панель управления: %s
 msgid "Configuration saved successfully."
 msgstr "Конфигурация успешно сохранена."
 
-msgid "Configuration test failed — service not reloaded. Please fix the errors below: %s"
-msgstr "Проверка конфигурации завершилась с ошибкой — служба не была перезагружена. Пожалуйста, исправьте следующие ошибки: %s"
+msgid "Configuration test failed — service not reloaded. Please fix the errors below:"
+msgstr "Проверка конфигурации завершилась с ошибкой — служба не была перезагружена. Пожалуйста, исправьте следующие ошибки:"
 
 msgid "unknown error"
 msgstr "неизвестная ошибка"

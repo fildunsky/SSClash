@@ -154,7 +154,7 @@ async function initializeAceEditor(content) {
 // =============================================================================
 
 // Keep in sync with luci-app-ssclash/Makefile PKG_VERSION
-const SSCLASH_VERSION = '4.6.4';
+const SSCLASH_VERSION = '4.7.0';
 
 const SSCLASH_REPO = 'zerolabnet/SSClash';
 const SSCLASH_RELEASES_URL = 'https://github.com/' + SSCLASH_REPO + '/releases';
@@ -201,32 +201,16 @@ return view.extend({
 
             const testResult = await fs.exec('/opt/clash/bin/clash', ['-d', '/opt/clash', '-t']);
             if (testResult.code !== 0) {
-                const rawDetail = (testResult.stderr || testResult.stdout || '').trim();
-                let shortDetail = rawDetail;
+                const detail = view_ssclash_utils.formatClashTestError(
+                    testResult.stdout, testResult.stderr
+                );
 
-                if (rawDetail) {
-                    const lines = rawDetail.split('\n');
-                    let found = false;
-                    for (const line of lines) {
-                        const msgMatch = line.match(/msg="([^"]+)"/);
-                        if (msgMatch) {
-                            shortDetail = msgMatch[1].trim();
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        const nonEmpty = lines.filter(l => l.trim().length > 0);
-                        if (nonEmpty.length > 0) {
-                            shortDetail = nonEmpty[nonEmpty.length - 1].trim();
-                        }
-                    }
-                }
-
-                ui.addNotification(null, E('p',
-                    _('Configuration test failed — service not reloaded. Please fix the errors below: %s')
-                    .format(shortDetail || _('unknown error'))
-                ), 'error');
+                ui.addNotification(null, E('div', {}, [
+                    E('p', _('Configuration test failed — service not reloaded. Please fix the errors below:')),
+                    E('pre', {
+                        'style': 'margin: 6px 0 0; padding: 0 0 0 10px; font-size: 11px; line-height: 1.45; font-family: monospace; white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow: auto; background: none; border: 0; border-left: 2px solid rgba(0,0,0,0.18);'
+                    }, detail || _('unknown error'))
+                ]), 'error');
                 return null;
             }
 

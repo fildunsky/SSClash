@@ -95,8 +95,8 @@ msgstr "无法打开控制面板：%s"
 msgid "Configuration saved successfully."
 msgstr "配置已成功保存。"
 
-msgid "Configuration test failed — service not reloaded. Please fix the errors below: %s"
-msgstr "配置测试失败，服务未重载。请修复以下错误：%s"
+msgid "Configuration test failed — service not reloaded. Please fix the errors below:"
+msgstr "配置测试失败，服务未重载。请修复以下错误："
 
 msgid "unknown error"
 msgstr "未知错误"

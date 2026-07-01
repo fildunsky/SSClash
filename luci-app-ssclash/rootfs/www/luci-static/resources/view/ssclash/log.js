@@ -2,11 +2,14 @@
 'require view';
 'require poll';
 'require fs';
+'require view.ssclash.utils';
 
 let editor = null;
 let lastLogLength = 0;
 let loggerPath = null;
 const MAX_INITIAL_LINES = 100;
+
+const SYSLOG_CLASH = /\w+\.(\w+)\s+(clash(?:-rules|-hotplug)?)(?:\[\d+\])?:\s*(.*)$/;
 
 function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -32,6 +35,35 @@ async function initializeAceEditor() {
     });
 
     startPolling();
+}
+
+function extractLogTime(line) {
+    const bracket = line.match(/\[(\d{4}-\d{2}-\d{2}\s+([\d:]+))\]/);
+    if (bracket) return bracket[2] || bracket[1];
+    const classic = line.match(/\b(\d{2}:\d{2}:\d{2})\b/);
+    return classic ? classic[1] : '??:??:??';
+}
+
+function daemonMarker(daemon) {
+    if (daemon === 'clash') return '🔵';
+    if (daemon === 'clash-rules') return '🟢';
+    if (daemon === 'clash-hotplug') return '🟠';
+    return '⚪';
+}
+
+function formatLogEntry(time, level, daemon, rawMessage) {
+    const message = view_ssclash_utils.formatClashLogMessage(rawMessage);
+    if (!message) return null;
+    return '[' + time + '] ' + daemonMarker(daemon) + ' [' + daemon + '] [' + level.toUpperCase() + '] ' + message;
+}
+
+function processLogLine(line) {
+    if (!line || !line.trim()) return null;
+
+    const m = line.trim().match(SYSLOG_CLASH);
+    if (!m) return null;
+
+    return formatLogEntry(extractLogTime(line), m[1], m[2], m[3]);
 }
 
 function startPolling() {
@@ -91,38 +123,6 @@ function startPolling() {
                 }
             });
     });
-}
-
-function processLogLine(line) {
-    const match = line.match(/^.*? ([\d:]{8}) .*?daemon\.(\w+)\s+(clash(?:-rules|-hotplug)?)\b(?:\[\d+\])?:\s*(.*)$/);
-
-    if (!match) {
-        return null;
-    }
-
-    const [, time, level, daemon, originalMessage] = match;
-    let message = originalMessage;
-
-    const msgMatch = originalMessage.match(/^msg="(.*)"$/);
-    if (msgMatch) {
-        message = msgMatch[1];
-    }
-
-    const clashTimeMatch = message.match(/^time="[^"]+"\s+level=\w+\s+msg="(.*)"$/);
-    if (clashTimeMatch) {
-        message = clashTimeMatch[1];
-    }
-
-    let marker = '⚪';
-    if (daemon === 'clash') {
-        marker = '🔵';
-    } else if (daemon === 'clash-rules') {
-        marker = '🟢';
-    } else if (daemon === 'clash-hotplug') {
-        marker = '🟠';
-    }
-
-    return `[${time}] ${marker} [${daemon}] [${level.toUpperCase()}] ${message}`;
 }
 
 return view.extend({
